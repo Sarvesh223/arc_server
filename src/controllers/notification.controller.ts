@@ -50,4 +50,62 @@ export class NotificationController {
       };
     }
   }
+  @Post('validate-tokens')
+  @ApiOperation({ summary: 'Validate all FCM tokens' })
+  async validateTokens() {
+    try {
+      const result = await this.firebaseService.validateTokens();
+      return {
+        success: true,
+        valid: result.valid.length,
+        invalid: result.invalid.length,
+        validTokens: result.valid,
+        invalidTokens: result.invalid,
+      };
+    } catch (error) {
+      console.log(error);
+      return {
+        success: false,
+      };
+    }
+  }
+  @Post('send-to-token')
+  @ApiOperation({ summary: 'Send notification to a specific token' })
+  @ApiBody({
+    schema: {
+      properties: {
+        token: { type: 'string' },
+        title: { type: 'string' },
+        body: { type: 'string' },
+        data: { type: 'object' },
+        urgent: { type: 'boolean' },
+      },
+    },
+  })
+  async sendToToken(
+    @Body()
+    body: {
+      token: string;
+      title: string;
+      body: string;
+      data?: Record<string, string>;
+      urgent?: boolean;
+    },
+  ) {
+    try {
+      await this.firebaseService.sendToToken(
+        body.token,
+        body.title,
+        body.body,
+        body.data,
+        body.urgent,
+      );
+      return { success: true };
+    } catch (error) {
+      console.log(error);
+      return {
+        success: false,
+      };
+    }
+  }
 }

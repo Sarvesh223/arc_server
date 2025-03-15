@@ -31,12 +31,15 @@ export class FirebaseService implements OnModuleInit {
 
       usersSnapshot.forEach((doc) => {
         const userData = doc.data();
-        if (userData.fcmToken) {
-          if (typeof userData.fcmToken === 'string') {
-            fcmTokens.push(userData.fcmToken);
+        // Updated to use fcm_token instead of fcmToken
+        if (userData.fcm_token) {
+          if (typeof userData.fcm_token === 'string') {
+            fcmTokens.push(userData.fcm_token);
           }
         }
       });
+
+      console.log(`Found ${fcmTokens.length} FCM tokens`);
 
       return fcmTokens;
     } catch (error) {
@@ -49,6 +52,7 @@ export class FirebaseService implements OnModuleInit {
     title: string,
     body: string,
     data?: Record<string, string>,
+    urgent: boolean = false,
   ): Promise<admin.messaging.BatchResponse> {
     try {
       const fcmTokens = await this.getAllFCMTokens();
@@ -57,18 +61,144 @@ export class FirebaseService implements OnModuleInit {
         throw new Error('No FCM tokens found');
       }
 
+      // Define Android-specific configuration for urgent notifications
+      const androidConfig: admin.messaging.AndroidConfig = {
+        priority: urgent ? 'high' : 'normal',
+        notification: {
+          channelId: 'Main notification',
+          priority: urgent ? 'high' : 'default',
+        },
+      };
+
+      // Define Apple-specific configuration
+      const apnsConfig: admin.messaging.ApnsConfig = {
+        headers: {
+          'apns-priority': urgent ? '10' : '5',
+        },
+        payload: {
+          aps: {
+            sound: urgent ? 'default' : undefined,
+            category: 'Main notification',
+            contentAvailable: true,
+          },
+        },
+      };
+
+      // Merge data with channel information if not provided
+      const notificationData = {
+        ...data,
+        channel_id: 'Main notification',
+        urgent: urgent ? 'true' : 'false',
+      };
+
       const message: admin.messaging.MulticastMessage = {
         notification: {
           title,
           body,
         },
-        data,
+        data: notificationData,
+        android: androidConfig,
+        apns: apnsConfig,
         tokens: fcmTokens,
       };
 
-      return await this.messaging.sendEachForMulticast(message);
+      console.log(`Sending notification to ${fcmTokens.length} devices`);
+
+      const response = await this.messaging.sendEachForMulticast(message);
+
+      // Add detailed logging for failures
+      if (response.failureCount > 0) {
+        console.log(`Failed to send ${response.failureCount} notifications`);
+        response.responses.forEach((resp, idx) => {
+          if (!resp.success) {
+            console.log(
+              `Failed to send to token ${fcmTokens[idx]}: ${resp.error?.message}`,
+            );
+          }
+        });
+      }
+
+      return response;
     } catch (error) {
       console.error('Error sending notifications:', error);
+      throw error;
+    }
+  }
+
+  // Utility method to validate tokens (useful for debugging)
+  async validateTokens(): Promise<{ valid: string[]; invalid: string[] }> {
+    const tokens = await this.getAllFCMTokens();
+    const valid: string[] = [];
+    const invalid: string[] = [];
+
+    for (const token of tokens) {
+      try {
+        // Dry run checks token validity without sending actual message
+        await this.messaging.send(
+          {
+            token,
+            notification: {
+              title: 'Token validation',
+              body: 'Validating token',
+            },
+          },
+          true, // dryRun=true
+        );
+        valid.push(token);
+      } catch (error) {
+        invalid.push(token);
+        console.log(`Invalid token: ${token}`, error);
+      }
+    }
+
+    return { valid, invalid };
+  }
+
+  // Method to test sending to a specific token with correct return type
+  async sendToToken(
+    token: string,
+    title: string,
+    body: string,
+    data?: Record<string, string>,
+    urgent: boolean = false,
+  ): Promise<string> {
+    try {
+      const message: admin.messaging.Message = {
+        notification: {
+          title,
+          body,
+        },
+        data: {
+          ...data,
+          channel_id: 'Main notification',
+          urgent: urgent ? 'true' : 'false',
+        },
+        android: {
+          priority: urgent ? 'high' : 'normal',
+          notification: {
+            channelId: 'Main notification',
+            priority: urgent ? 'high' : 'default',
+          },
+        },
+        apns: {
+          headers: {
+            'apns-priority': urgent ? '10' : '5',
+          },
+          payload: {
+            aps: {
+              sound: urgent ? 'default' : undefined,
+              category: 'Main notification',
+              contentAvailable: true,
+            },
+          },
+        },
+        token,
+      };
+
+      // The send method returns a message ID string in newer Firebase versions
+      return await this.messaging.send(message);
+    } catch (error) {
+      console.error('Error sending notification to token:', error);
       throw error;
     }
   }
